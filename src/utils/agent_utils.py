@@ -124,3 +124,90 @@ class {agent_class_name}(BaseAgent):
     print(f"Agent saved to {output_path}")
     print(f"The file contains {len(agent.q_table)} state-action pairs.")
     print(f"You can now use this file with validate_agent.ipynb and evaluate_agent.ipynb")
+
+
+
+def save_dqn_agent(agent, output_path, agent_class_name="DQNTrainedAgent"):
+    """
+    Save a trained DQN agent as a standalone Python file.
+    
+    Args:
+        agent: The trained DQN agent instance
+        output_path: Path where to save the agent file
+        agent_class_name: Name for the agent class in the saved file
+    
+    Returns:
+        None
+    """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # Récupération des poids
+    weights = agent.policy_net.copy_weights()
+    
+    # Préparation du contenu du fichier
+    file_content = f'''"""
+    A DQN agent trained on the sailing environment.
+"""
+
+import numpy as np
+from agents.base_agent import BaseAgent
+
+class {agent_class_name}(BaseAgent):
+    def __init__(self):
+        super().__init__()
+'''
+    for key, val in weights.items():
+        file_content += f"        self.{key} = np.array({val.tolist()})\n"
+
+    file_content += '''
+    def forward(self, X):
+        l1 = np.dot(X, self.W1) + self.b1
+        relu1 = np.maximum(0, l1) 
+        l2 = np.dot(relu1, self.W2) + self.b2
+        relu2 = np.maximum(0, l2) 
+        l3 = np.dot(relu2, self.W3) + self.b3
+        relu3 = np.maximum(0, l3) 
+        l4 = np.dot(relu3, self.W4) + self.b4
+        return l4
+
+    def get_features(self, observation):
+        x, y = observation[0], observation[1]
+        vx, vy = observation[2], observation[3]
+        wx, wy = observation[4], observation[5]
+        world_data = observation[32774:]
+        
+        features = []
+        direction = [(0,1), (1,1), (1,0), (1,-1), (0,-1), (-1,-1), (-1,0), (-1,1)]
+        for dx, dy in direction: 
+            danger = 0
+            for dist in range(1, 21): 
+                nx, ny = int(x + dx*dist), int(y + dy*dist)
+                if 0 <= nx < 128 and 0 <= ny < 128:
+                    if world_data[nx * 128 + ny] == 1:
+                        danger = (21 - dist) / 21
+                        break
+            features.append(danger)
+        
+        return np.array([x/128, y/128, vx, vy, wx, wy] + features)
+
+    def act(self, observation):
+        """Choose an action"""
+        state = self.get_features(observation).reshape(1, -1)
+        q_values = self.forward(state)
+        return int(np.argmax(q_values))
+        
+    def reset(self):
+        """Reset the agent for a new episode."""
+        # Nothing to reset
+        pass
+        
+    def seed(self, seed=None):
+        """Set the random seed."""
+        self.np_random = np.random.default_rng(seed)
+    
+'''
+
+    with open(output_path, 'w') as f:
+        f.write(file_content)
+    
+    print(f"Agent saved to {output_path}")
