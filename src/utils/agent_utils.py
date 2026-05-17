@@ -145,17 +145,17 @@ def save_dqn_agent(agent, output_path, agent_class_name="DQNTrainedAgent"):
     weights = agent.policy_net.copy_weights()
     
     # Préparation du contenu du fichier
-    file_content = f'''"""
-    A DQN agent trained on the sailing environment.
+    file_content = '''"""
+A DQN agent trained on the sailing environment.
 """
 
 import numpy as np
-from agents.base_agent import BaseAgent
+from evaluator.base_agent import BaseAgent
 
-class {agent_class_name}(BaseAgent):
+class MyAgent(BaseAgent):
     def __init__(self):
         super().__init__()
-'''
+    '''
     for key, val in weights.items():
         file_content += f"        self.{key} = np.array({val.tolist()})\n"
 
@@ -166,33 +166,79 @@ class {agent_class_name}(BaseAgent):
         l2 = np.dot(relu1, self.W2) + self.b2
         relu2 = np.maximum(0, l2) 
         l3 = np.dot(relu2, self.W3) + self.b3
-        relu3 = np.maximum(0, l3) 
-        l4 = np.dot(relu3, self.W4) + self.b4
-        return l4
+        return l3
 
-    def get_features(self, observation):
-        x, y = observation[0], observation[1]
-        vx, vy = observation[2], observation[3]
-        wx, wy = observation[4], observation[5]
-        world_data = observation[32774:]
-        
+    def get_features(self, observation, training=True):
+        """create (22) features from observations"""
+        x, y = observation[0], observation[1] #position
+        vx, vy = observation[2], observation[3] #speed
+        wx, wy = observation[4], observation[5] #wind
+        flattened_world = observation[6+32768:].reshape(128,128) #world map
+
+        if training :
+            #randomize wind in training (for generalization)
+            theta = self.np_random.uniform(-np.pi/2, np.pi/2) 
+            scale = self.np_random.uniform(0.7, 1.3)
+            wx, wy = wx * scale, wy * scale
+            wx_rot = wx * np.cos(theta) - wy * np.sin(theta)
+            wy_rot = wx * np.sin(theta) + wy * np.cos(theta)
+            wx, wy = wx_rot, wy_rot
+
+        #clip information (avoid extreme values)
+        vx = np.clip(vx, -5, 5) / 5
+        vy = np.clip(vy, -5, 5) / 5
+        wx = np.clip(wx, -5, 5) / 5
+        wy = np.clip(wy, -5, 5) / 5
+
+        #store features
         features = []
+
+        #feature with local speed and position
+        v = np.sqrt(vx**2+vy**2) #norm 2 of the speed vector 
+        features.extend([x/128, y/128, vx, vy, v])
+
+        #feature with goal
+        goal = [64, 127]
+        dx, dy = goal[0] - x, goal[1] - y
+        dist_to_goal = np.sqrt(dx**2 + dy**2)
+        norm = np.sqrt(128**2 + 128**2)
+        angle_to_goal = np.arctan2(dy, dx)
+        features.extend([dist_to_goal/norm, np.cos(angle_to_goal), np.sin(angle_to_goal)])
+
+        #vmg (velocity made good)
+        if v>0.05:
+            boat_angle = np.arctan2(vy, vx)
+            vmg = v * np.cos(boat_angle - angle_to_goal)
+        else :
+            vmg = v
+            boat_angle = angle_to_goal
+        features.append(vmg)
+
+        #feature angle with wind
+        wind_angle = np.arctan2(wy, wx)
+        relative_wind = abs((wind_angle - boat_angle + np.pi) % (2*np.pi) - np.pi)
+        wind_goal_angle = abs((wind_angle - angle_to_goal + np.pi) % (2*np.pi) - np.pi)
+        features.extend([np.cos(relative_wind), np.sin(relative_wind),np.cos(wind_goal_angle), np.sin(wind_goal_angle), np.sqrt(wx**2 + wy**2)])
+
+        #feature of danger
         direction = [(0,1), (1,1), (1,0), (1,-1), (0,-1), (-1,-1), (-1,0), (-1,1)]
-        for dx, dy in direction: 
+        #we choose a direction and create a feature of danger to the island
+        for direction_x, direction_y in direction: 
             danger = 0
-            for dist in range(1, 21): 
-                nx, ny = int(x + dx*dist), int(y + dy*dist)
-                if 0 <= nx < 128 and 0 <= ny < 128:
-                    if world_data[nx * 128 + ny] == 1:
-                        danger = (21 - dist) / 21
+            for distance in range(1,25):
+                new_x = int(x + direction_x*distance)
+                new_y = int(y + direction_y*distance)
+                if 0 <= new_x < 128 and 0<= new_y < 128:
+                    if flattened_world[new_x,new_y] == 1:
+                        danger = (25 - distance)/25 
                         break
             features.append(danger)
         
-        return np.array([x/128, y/128, vx, vy, wx, wy] + features)
-
+        return np.array(features)
+        
     def act(self, observation):
         """Choose an action"""
-        state = self.get_features(observation).reshape(1, -1)
+        state = self.get_features(observation, training=False).reshape(1, -1)
         q_values = self.forward(state)
         return int(np.argmax(q_values))
         
