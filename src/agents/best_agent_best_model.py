@@ -24,30 +24,32 @@ class MyAgent(BaseAgent):
         return l3
 
     def get_features(self, observation, training=True):
-        x, y = observation[0], observation[1]
-        vx, vy = observation[2], observation[3]
-        wx, wy = observation[4], observation[5]
-        #flattened_wind_field = observation[6:6+32768].reshape(2, 128, 128)
-        flattened_world = observation[6+32768:].reshape(128,128)
+        """create (22) features from observations"""
+        x, y = observation[0], observation[1] #position
+        vx, vy = observation[2], observation[3] #speed
+        wx, wy = observation[4], observation[5] #wind
+        flattened_world = observation[6+32768:].reshape(128,128) #world map
+
         if training :
-            #randomisation du vent
-            theta = self.np_random.uniform(-np.pi/2, np.pi/2)
+            #randomize wind in training (for generalization)
+            theta = self.np_random.uniform(-np.pi/2, np.pi/2) 
             scale = self.np_random.uniform(0.7, 1.3)
-
             wx, wy = wx * scale, wy * scale
-
             wx_rot = wx * np.cos(theta) - wy * np.sin(theta)
             wy_rot = wx * np.sin(theta) + wy * np.cos(theta)
-
             wx, wy = wx_rot, wy_rot
 
+        #clip information (avoid extreme values)
         vx = np.clip(vx, -5, 5) / 5
         vy = np.clip(vy, -5, 5) / 5
         wx = np.clip(wx, -5, 5) / 5
         wy = np.clip(wy, -5, 5) / 5
 
+        #store features
         features = []
-        v = np.sqrt(vx**2+vy**2)
+
+        #feature with local speed and position
+        v = np.sqrt(vx**2+vy**2) #norm 2 of the speed vector 
         features.extend([x/128, y/128, vx, vy, v])
 
         #feature with goal
@@ -58,7 +60,7 @@ class MyAgent(BaseAgent):
         angle_to_goal = np.arctan2(dy, dx)
         features.extend([dist_to_goal/norm, np.cos(angle_to_goal), np.sin(angle_to_goal)])
 
-        #vmg
+        #vmg (velocity made good)
         if v>0.05:
             boat_angle = np.arctan2(vy, vx)
             vmg = v * np.cos(boat_angle - angle_to_goal)
@@ -75,7 +77,7 @@ class MyAgent(BaseAgent):
 
         #feature of danger
         direction = [(0,1), (1,1), (1,0), (1,-1), (0,-1), (-1,-1), (-1,0), (-1,1)]
-        #on choisit une direction et on crée une feature de danger par rapport à l'ile
+        #we choose a direction and create a feature of danger to the island
         for direction_x, direction_y in direction: 
             danger = 0
             for distance in range(1,25):
